@@ -40,33 +40,16 @@ class FaceSwapper:
                 image_dst = self.__image.copy()
                 retval, landmarks_list = self.__landmark_detector_obj.fit(image_dst, bbox)
 
-                face_1_dst_landmarks = landmarks_list[0][0][0:17] # Get only the external facial landmarks
+                face_1_dst_landmarks = landmarks_list[0][0][0:17] # Get only the external facial landmarks in the dst image
                 face_2_dst_landmarks = landmarks_list[1][0][0:17]
-                
-                face_1_src_img = self.__image[bbox[0][1]:bbox[0][1]+bbox[0][3], bbox[0][0]:bbox[0][0]+bbox[0][2], :]
-                face_2_src_img = self.__image[bbox[1][1]:bbox[1][1]+bbox[1][3], bbox[1][0]:bbox[1][0]+bbox[1][2], :]
 
-                face_2_src_bbox = []
-                face_2_src_bbox.append([0,0,face_2_src_img.shape[1],face_2_src_img.shape[0]])
-                retval, face_2_src_landmarks = self.__landmark_detector_obj.fit(face_2_src_img, np.array(face_2_src_bbox).astype(int))
+                face_1_src_img, face_1_src_landmarks = self.__getFaceSrcImage(bbox[0])
+                face_2_src_img, face_2_src_landmarks = self.__getFaceSrcImage(bbox[1])
 
-                h_f2_to_f1, mask = cv2.findHomography(face_2_src_landmarks[0][0][0:17], face_1_dst_landmarks, cv2.RANSAC)
+                dst_image = self.__warpSrcImageToDst(face_2_src_landmarks, face_1_dst_landmarks, face_2_src_img, image_dst)
+                dst_image = self.__warpSrcImageToDst(face_1_src_landmarks, face_2_dst_landmarks, face_1_src_img, dst_image)
 
-                warped_image = cv2.warpPerspective(face_2_src_img, h_f2_to_f1, (image_dst.shape[1], image_dst.shape[0]))
-                mask = np.zeros([image_dst.shape[0], image_dst.shape[1]], dtype=np.uint8)
-
-                cv2.fillConvexPoly(mask, np.int32([face_1_dst_landmarks]), (255, 255, 255), cv2.LINE_AA)
-                
-                warped_image = warped_image.astype(float)
-                mask3 = np.zeros_like(warped_image)
-                for i in range(0, 3):
-                    mask3[:, :, i] = mask / 255
-                mask3_inv = 1 - mask3
-
-                frame_masked = cv2.multiply(image_dst.astype(float), mask3_inv)
-                frame_out = cv2.add(warped_image.astype(np.uint8), frame_masked.astype(np.uint8))
-
-                cv2.imshow('Final frame', frame_out)
+                cv2.imshow('Final frame', dst_image)
                 cv2.waitKey(0)
             else:
                 print('[ERROR] Not enough faces detected across the image. Only 2 are needed to proceed')
@@ -75,6 +58,38 @@ class FaceSwapper:
 
         cv2.destroyAllWindows()
     
+    def __warpSrcImageToDst(self, face_src_landmarks, face_dst_landmarks, face_src, dst_image):
+        h, mask = cv2.findHomography(face_src_landmarks[0][0][0:17], face_dst_landmarks, cv2.RANSAC)
+        warped_image = cv2.warpPerspective(face_src, h, (self.__image.shape[1], self.__image.shape[0]))
+
+        mask = np.zeros([self.__image.shape[0], self.__image.shape[1]], dtype=np.uint8)
+        cv2.fillConvexPoly(mask, np.int32([face_dst_landmarks]), (255,255,255), cv2.LINE_AA)
+
+        face_dst_mask_3 = np.zeros_like(warped_image.astype(float))
+        for i in range(0, 3):
+            face_dst_mask_3[:,:,i] = mask / 255
+
+        frame_masked = cv2.multiply(dst_image.astype(float), 1 - face_dst_mask_3)
+        out = cv2.add(warped_image.astype(np.uint8), frame_masked.astype(np.uint8))
+
+        return out
+
+    def __getFaceSrcImage(self, bbox):
+        face_src_img = self.__image[bbox[1]:bbox[1]+bbox[3], bbox[0]:bbox[0]+bbox[2], :]
+
+        retval, face_src_landmarks = self.__landmark_detector_obj.fit(face_src_img,
+                                    np.array([[0,0,face_src_img.shape[1],face_src_img.shape[0]]]).astype(np.int32))
+        
+        # Get a face mask only, and not the full bbox for the warped image
+        face_src_mask = np.zeros([face_src_img.shape[0], face_src_img.shape[1]], dtype=np.uint8)
+        cv2.fillConvexPoly(face_src_mask, np.int32([face_src_landmarks[0][0][0:17]]), (255,255,255), cv2.LINE_AA)
+
+        face_src_mask_3 = np.zeros_like(face_src_img.astype(float))
+        for i in range(0,3):
+            face_src_mask_3[:,:,i] = face_src_mask / 255 # Same value in the three channels
+        
+        return cv2.multiply(face_src_img.astype(float), face_src_mask_3), face_src_landmarks
+
     def __getFaceBoundingBox(self, image, detections, detection_threshold=0.90):
         height, width = image.shape[:2]
         faces = []
