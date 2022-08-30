@@ -16,6 +16,7 @@ class Paths():
 
 class FaceSwapper:
     __image = None
+    __file  = None
     __model_params = ModelParams()
     __paths = Paths()
 
@@ -49,8 +50,10 @@ class FaceSwapper:
                 dst_image = self.__warpSrcImageToDst(face_2_src_landmarks, face_1_dst_landmarks, face_2_src_img, image_dst)
                 dst_image = self.__warpSrcImageToDst(face_1_src_landmarks, face_2_dst_landmarks, face_1_src_img, dst_image)
 
-                cv2.imshow('Final frame', dst_image)
+                cv2.imshow('Final frame, press any key to save the results', dst_image)
                 cv2.waitKey(0)
+
+                self.__saveResult(dst_image, self.__file)
             else:
                 print('[ERROR] Not enough faces detected across the image. Only 2 are needed to proceed')
         else:
@@ -111,6 +114,7 @@ class FaceSwapper:
     def __loadImage(self):
         try:
             for file in os.listdir(self.__paths.folder_path):
+                self.__file = file
                 self.__image = cv2.imread(self.__paths.folder_path + '/' + file, cv2.IMREAD_COLOR)
             print('[INFO] Loaded image')
         except:
@@ -118,7 +122,7 @@ class FaceSwapper:
     
     def __saveResult(self, image, image_name):
         try:
-            filename = 'swapped' + image_name
+            filename = self.__paths.folder_path + '/' + 'swapped-' + image_name
             cv2.imwrite(filename, image)
             print('[INFO] Correctly saved image as:', filename)
         except:
