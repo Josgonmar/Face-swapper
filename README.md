@@ -22,7 +22,7 @@ It's converted into:
 
 ![alt text](https://github.com/Josgonmar/Face-swapper/blob/master/docs/swapped-test.jpeg?raw=true)
 
-As you can see, both faces are swapped within the same image. First it uses a deep learning model to detect both bounding boxes with high precision, to later use [OpenCV's](https://docs.opencv.org/4.6.0/d2/d42/tutorial_face_landmark_detection_in_an_image.html) face landmark detector model. With these landmarks, several homography and image warping operations are performed, as well as some morphological operations, in order to get the final results.
+As you can see, both faces are swapped within the same image. First it uses a deep learning model to detect both bounding boxes with high precision, to later use [OpenCV's](https://docs.opencv.org/4.6.0/d2/d42/tutorial_face_landmark_detection_in_an_image.html) face landmark detector model. With these landmarks, several affine warping operations are performed using delauny triangles, as well as some morphological operations, in order to get the final results.
 
 Of course, the results may differ depending on the source image and the clarity of the faces on it.
 ## License:

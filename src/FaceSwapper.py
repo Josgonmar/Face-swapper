@@ -37,61 +37,131 @@ class FaceSwapper:
             detections = self.__face_detector.forward()
             bbox = self.__getFaceBoundingBox(self.__image, detections)
 
-            if (len(bbox) > 1):
+            if (len(bbox) == 2):
                 image_dst = self.__image.copy()
                 retval, landmarks_list = self.__landmark_detector_obj.fit(image_dst, bbox)
 
-                face_1_dst_landmarks = landmarks_list[0][0][0:17] # Get only the external facial landmarks in the dst image
-                face_2_dst_landmarks = landmarks_list[1][0][0:17]
+                self.__warpSrcToDstFace(self.__image, image_dst, landmarks_list[0][0], landmarks_list[1][0])
+                self.__warpSrcToDstFace(self.__image, image_dst, landmarks_list[1][0], landmarks_list[0][0])
 
-                face_1_src_img, face_1_src_landmarks = self.__getFaceSrcImage(bbox[0])
-                face_2_src_img, face_2_src_landmarks = self.__getFaceSrcImage(bbox[1])
-
-                dst_image = self.__warpSrcImageToDst(face_2_src_landmarks, face_1_dst_landmarks, face_2_src_img, image_dst)
-                dst_image = self.__warpSrcImageToDst(face_1_src_landmarks, face_2_dst_landmarks, face_1_src_img, dst_image)
-
-                cv2.imshow('Final frame, press any key to save the results', dst_image)
+                cv2.imshow('Final frame, press any key to save the results', image_dst)
                 cv2.waitKey(0)
 
-                self.__saveResult(dst_image, self.__file)
+                self.__saveResult(image_dst, self.__file)
             else:
                 print('[ERROR] Not enough faces detected across the image. Only 2 are needed to proceed')
         else:
             print('[WARINING] No image loaded. Finishing the program.')
 
         cv2.destroyAllWindows()
-    
-    def __warpSrcImageToDst(self, face_src_landmarks, face_dst_landmarks, face_src, dst_image):
-        h, mask = cv2.findHomography(face_src_landmarks[0][0][0:17], face_dst_landmarks, cv2.RANSAC)
-        warped_image = cv2.warpPerspective(face_src, h, (self.__image.shape[1], self.__image.shape[0]))
 
-        mask = np.zeros([self.__image.shape[0], self.__image.shape[1]], dtype=np.uint8)
-        cv2.fillConvexPoly(mask, np.int32([face_dst_landmarks]), (255,255,255), cv2.LINE_AA)
+    def __warpSrcToDstFace(self, src_img, dst_img, src_face_landmarks, dst_face_landmarks):
+        face_1_dst_landmarks = []
+        face_2_dst_landmarks = []
 
-        face_dst_mask_3 = np.zeros_like(warped_image.astype(float))
+        hullIndex = cv2.convexHull(np.array(src_face_landmarks), returnPoints=False)
+
+        for i in range(0, len(hullIndex)):
+            face_1_dst_landmarks.append(src_face_landmarks[hullIndex[i][0]])
+            face_2_dst_landmarks.append(dst_face_landmarks[hullIndex[i][0]])
+
+        rect = (0, 0, dst_img.shape[1], dst_img.shape[0])
+
+        dt = self.__calculateDelaunayTriangles(rect, face_2_dst_landmarks)
+        if len(dt) == 0:
+            print("No Delanauy triangles calculated")
+
+        for i in range(0, len(dt)):
+            t1 = []
+            t2 = []
+
+            for j in range(0, 3):
+                t1.append(face_1_dst_landmarks[dt[i][j]])
+                t2.append(face_2_dst_landmarks[dt[i][j]])
+
+            self.__warpTriangle(src_img, dst_img, t1, t2)
+
+    def __rectContains(self, rect, point):
+        if point[0] < rect[0]:
+            return False
+        elif point[1] < rect[1]:
+            return False
+        elif point[0] > rect[2]:
+            return False
+        elif point[1] > rect[3]:
+            return False
+        return True
+
+    def __applyAffineTransform(self, src, srcTri, dstTri, size):
+        warpMat = cv2.getAffineTransform(np.float32(srcTri), np.float32(dstTri))
+        dst = cv2.warpAffine(src, warpMat, (size[0], size[1]), None,
+                    flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT_101)
+
+        return dst
+        
+    def __warpTriangle(self, img1, img2, t1, t2):
+        r1 = cv2.boundingRect(np.float32([t1]))
+        r2 = cv2.boundingRect(np.float32([t2]))
+
+        t1Rect = []
+        t2Rect = []
+        t2RectInt = []
+
         for i in range(0, 3):
-            face_dst_mask_3[:,:,i] = mask / 255
+            t1Rect.append(((t1[i][0] - r1[0]), (t1[i][1] - r1[1])))
+            t2Rect.append(((t2[i][0] - r2[0]), (t2[i][1] - r2[1])))
+            t2RectInt.append(((t2[i][0] - r2[0]), (t2[i][1] - r2[1])))
 
-        frame_masked = cv2.multiply(dst_image.astype(float), 1 - face_dst_mask_3)
-        out = cv2.add(warped_image.astype(np.uint8), frame_masked.astype(np.uint8))
+        mask = np.zeros((r2[3], r2[2], 3), dtype=np.float32)
+        cv2.fillConvexPoly(mask, np.int32(t2RectInt), (1.0, 1.0, 1.0), 16, 0)
 
-        return out
+        img1Rect = img1[r1[1]:r1[1] + r1[3], r1[0]:r1[0] + r1[2]]
 
-    def __getFaceSrcImage(self, bbox):
-        face_src_img = self.__image[bbox[1]:bbox[1]+bbox[3], bbox[0]:bbox[0]+bbox[2], :]
+        size = (r2[2], r2[3])
 
-        retval, face_src_landmarks = self.__landmark_detector_obj.fit(face_src_img,
-                                    np.array([[0,0,face_src_img.shape[1],face_src_img.shape[0]]]).astype(np.int32))
-        
-        # Get a face mask only, and not the full bbox for the warped image
-        face_src_mask = np.zeros([face_src_img.shape[0], face_src_img.shape[1]], dtype=np.uint8)
-        cv2.fillConvexPoly(face_src_mask, np.int32([face_src_landmarks[0][0][0:17]]), (255,255,255), cv2.LINE_AA)
+        img2Rect = self.__applyAffineTransform(img1Rect, t1Rect, t2Rect, size)
 
-        face_src_mask_3 = np.zeros_like(face_src_img.astype(float))
-        for i in range(0,3):
-            face_src_mask_3[:,:,i] = face_src_mask / 255 # Same value in the three channels
-        
-        return cv2.multiply(face_src_img.astype(float), face_src_mask_3), face_src_landmarks
+        img2Rect = img2Rect * mask
+
+        img2[r2[1]:r2[1]+r2[3], r2[0]:r2[0]+r2[2]] = img2[r2[1]:r2[1]+r2[3], r2[0]:r2[0]+r2[2]] * ((1.0, 1.0, 1.0) - mask)
+        img2[r2[1]:r2[1]+r2[3], r2[0]:r2[0]+r2[2]] = img2[r2[1]:r2[1]+r2[3], r2[0]:r2[0]+r2[2]] + img2Rect
+
+    def __calculateDelaunayTriangles(self, rect, points):
+        subdiv = cv2.Subdiv2D(rect)
+
+        for p in points:
+            if p[0] > self.__image.shape[1]:
+                p[0] = self.__image.shape[1] - 1
+
+            if p[1] > self.__image.shape[0]:
+                p[1] = self.__image.shape[0] - 1
+
+            subdiv.insert((p[0], p[1]))
+
+        triangleList = subdiv.getTriangleList()
+
+        delaunayTri = []
+
+        for t in triangleList:
+            pt = []
+            pt.append((t[0], t[1]))
+            pt.append((t[2], t[3]))
+            pt.append((t[4], t[5]))
+
+            pt1 = (t[0], t[1])
+            pt2 = (t[2], t[3])
+            pt3 = (t[4], t[5])
+
+            if self.__rectContains(rect, pt1) and self.__rectContains(rect, pt2) and self.__rectContains(rect, pt3):
+                ind = []
+                for j in range(0, 3):
+                    for k in range(0, len(points)):
+                        if(abs(pt[j][0] - points[k][0]) < 1.0 and abs(pt[j][1] - points[k][1]) < 1.0):
+                            ind.append(k)
+                if len(ind) == 3:
+                    delaunayTri.append((ind[0], ind[1], ind[2]))
+
+        return delaunayTri
 
     def __getFaceBoundingBox(self, image, detections, detection_threshold=0.90):
         height, width = image.shape[:2]
@@ -108,7 +178,7 @@ class FaceSwapper:
                 face_height = y2 - y1
 
                 faces.append([x1, y1, face_width, face_height])
-        
+    
         return np.array(faces).astype(int)
 
     def __loadImage(self):
@@ -119,7 +189,7 @@ class FaceSwapper:
             print('[INFO] Loaded image')
         except:
             print('[ERROR] An error occured while reading the images')
-    
+
     def __saveResult(self, image, image_name):
         try:
             filename = self.__paths.folder_path + '/' + 'swapped-' + image_name
@@ -128,7 +198,7 @@ class FaceSwapper:
         except:
             print('[ERROR] An error occurred while saving the image')
 
-        
+
 
 if __name__ == "__main__":
     FaceSwapper_obj = FaceSwapper()
